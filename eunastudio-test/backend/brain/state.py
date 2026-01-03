@@ -3,41 +3,44 @@ from datetime import datetime, timedelta
 
 class ExamState:
     """
-    Estado vivo de una simulación.
+    Estado vivo de una simulación 180.
     NO corrige.
     NO califica.
-    Solo sabe:
-    - dónde va el usuario
-    - cuánto tiempo queda
-    - qué bloque está activo
+    SOLO controla:
+    - bloque actual
+    - tiempos
+    - progreso
     """
 
     def __init__(self, exam_id: str):
         self.exam_id = exam_id
         self.started_at = datetime.utcnow()
 
-        # 🔹 bloques
+        # 🔹 bloques posibles: A → INTERMISSION → B → COMPLETED
         self.current_block = "A"
         self.block_start_time = datetime.utcnow()
 
+        # ⏱️ duraciones oficiales
         self.block_durations = {
-            "A": timedelta(minutes=30),
-            "B": timedelta(minutes=60),
+            "A": timedelta(minutes=80),
+            "INTERMISSION": timedelta(minutes=30),
+            "B": timedelta(minutes=80),
         }
 
+        # 📊 límites por bloque
         self.block_limits = {
-            "A": 90,
-            "B": 180,  # total acumulado
+            "A": 90,     # preguntas bloque A
+            "B": 180,    # total acumulado (A + B)
         }
 
         # 📝 respuestas
         self.answers: dict[str, str] = {}
-
-        # 📊 progreso
         self.answered_count = 0
+
+        # estado final
         self.completed = False
 
-        # 🧠 métricas futuras (adaptatividad)
+        # 🧠 métricas futuras
         self.by_topic = {}
         self.by_specialty = {}
 
@@ -46,24 +49,35 @@ class ExamState:
     # ----------------------------------
     def remaining_time_seconds(self) -> int:
         elapsed = datetime.utcnow() - self.block_start_time
-        remaining = self.block_durations[self.current_block] - elapsed
+        duration = self.block_durations.get(self.current_block)
+        if not duration:
+            return 0
+
+        remaining = duration - elapsed
         return max(0, int(remaining.total_seconds()))
 
     # ----------------------------------
-    # 🔁 Cambiar de bloque
+    # 🔁 Avanzar de bloque
     # ----------------------------------
-    def switch_block(self):
+    def advance_block(self):
         if self.current_block == "A":
+            self.current_block = "INTERMISSION"
+        elif self.current_block == "INTERMISSION":
             self.current_block = "B"
-            self.block_start_time = datetime.utcnow()
-        else:
+        elif self.current_block == "B":
             self.completed = True
+            self.current_block = "COMPLETED"
+            return
+        else:
+            return
+
+        self.block_start_time = datetime.utcnow()
 
     # ----------------------------------
-    # 📝 Registrar respuesta (API estándar)
+    # 📝 Registrar respuesta
     # ----------------------------------
     def record_answer(self, question_id: str, answer: str):
-        if self.completed:
+        if self.completed or self.current_block == "INTERMISSION":
             return
 
         if question_id not in self.answers:
@@ -71,30 +85,18 @@ class ExamState:
 
         self.answers[question_id] = answer
 
-        # ⏩ control de bloque
-        limit = self.block_limits[self.current_block]
-        if self.answered_count >= limit:
-            self.switch_block()
+        # 🔒 control por cantidad de preguntas
+        if self.current_block in self.block_limits:
+            limit = self.block_limits[self.current_block]
+            if self.answered_count >= limit:
+                self.advance_block()
 
     # ----------------------------------
-    # 📊 Registrar desempeño (futuro)
+    # ⏱️ Verificar tiempo y avanzar
     # ----------------------------------
-    def register_result(self, question, is_correct: bool):
-        topic = getattr(question, "topic", None)
-        if topic:
-            self.by_topic.setdefault(topic, {"total": 0, "correct": 0})
-            self.by_topic[topic]["total"] += 1
-            if is_correct:
-                self.by_topic[topic]["correct"] += 1
-
-        specialty = getattr(question, "specialty", None)
-        if specialty:
-            self.by_specialty.setdefault(
-                specialty, {"total": 0, "correct": 0}
-            )
-            self.by_specialty[specialty]["total"] += 1
-            if is_correct:
-                self.by_specialty[specialty]["correct"] += 1
+    def check_time(self):
+        if self.remaining_time_seconds() == 0:
+            self.advance_block()
 
     # ----------------------------------
     # 📦 Serializar estado (API safe)
@@ -110,12 +112,12 @@ class ExamState:
         }
 
     # ----------------------------------
-    # 🧭 Resumen rápido para frontend
+    # 🧭 Resumen para frontend
     # ----------------------------------
     def progress(self) -> dict:
         return {
             "answered": self.answered_count,
-            "remaining_seconds": self.remaining_time_seconds(),
             "block": self.current_block,
+            "remaining_seconds": self.remaining_time_seconds(),
             "completed": self.completed,
         }

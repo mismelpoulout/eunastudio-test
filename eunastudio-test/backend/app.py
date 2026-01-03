@@ -5,7 +5,7 @@ from brain.generator import generate_simulation
 from brain.state import ExamState
 
 app = Flask(__name__)
-CORS(app)  # 🔥 CLAVE PARA FRONTEND
+CORS(app)  # 🔥 necesario para frontend (Vite / React)
 
 # 🧠 memoria temporal (luego Redis / DB)
 EXAM_STATES: dict[str, ExamState] = {}
@@ -50,9 +50,28 @@ def submit_partial():
 
     state = EXAM_STATES[exam_id]
 
+    # ⏱️ verificar si el tiempo del bloque terminó
+    state.check_time()
+
+    if state.completed:
+        return jsonify({
+            "error": "El examen ya fue completado",
+            "state": state.to_dict()
+        }), 400
+
+    # 🚫 no aceptar respuestas en intermedio
+    if state.current_block == "INTERMISSION":
+        return jsonify({
+            "error": "Intermedio activo. No se aceptan respuestas.",
+            "state": state.to_dict()
+        }), 400
+
     # 📝 registrar respuestas
     for qid, value in answers.items():
-        state.register_answer(qid, value)  # ✅ método correcto
+        state.record_answer(qid, value)  # ✅ método correcto
+
+    # ⏱️ volver a chequear por si alcanzó límite
+    state.check_time()
 
     return jsonify({
         "message": "Respuestas registradas",
@@ -68,6 +87,9 @@ def get_state(exam_id):
 
     if not state:
         return jsonify({"error": "Estado no encontrado"}), 404
+
+    # ⏱️ actualizar estado por tiempo
+    state.check_time()
 
     return jsonify(state.to_dict())
 
